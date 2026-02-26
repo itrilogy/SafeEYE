@@ -47,7 +47,8 @@ export default function InteractionJudge({ onExamStart, onExamChange, autoStartE
         // 2. 拉取所有已发行的考卷列表供用户挑选
         const pRes = await fetch('/api/exams');
         if (pRes.ok) {
-            const exams = await pRes.json();
+            const rawExams = await pRes.json();
+            const exams = rawExams.filter(e => e.status === 'published'); // 过滤仅限已发布试卷
             setAllExams(exams);
             if (exams.length > 0) {
                 let targetExam = exams[0];

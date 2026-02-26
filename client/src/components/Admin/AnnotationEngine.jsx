@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MousePointer2, Save, X, Square, Circle, Scaling } from 'lucide-react';
+import { MousePointer2, Save, X, Square, Circle, Scaling, Trash2 } from 'lucide-react';
 
 export default function AnnotationEngine() {
     const [images, setImages] = useState([]);
@@ -25,6 +25,7 @@ export default function AnnotationEngine() {
     // 过滤与搜索状态
     const [searchQuery, setSearchQuery] = useState('');
     const [filterStatus, setFilterStatus] = useState('all'); // 'all', 'annotated', 'unannotated'
+    const [filterScene, setFilterScene] = useState('all');
 
     const handleUpload = async (e) => {
         const file = e.target.files[0];
@@ -246,11 +247,9 @@ export default function AnnotationEngine() {
                 description: '',
                 scoreWeight: 10
             });
-            // 预设模态框级联字典
-            const activeScene = selectedGlobalScene || knowledgeTree[0]?.scene || '';
-            const typeGroup = knowledgeTree.find(k => k.scene === activeScene)?.types[0];
-            setMScene(activeScene);
-            setMType(typeGroup?.typeName || '');
+            // 模态框级联字典重置为空，强制用户主动下拉选择
+            setMScene('');
+            setMType('');
             setMItem(''); // 等待用户选择最终节点
             setShowModal(true);
         }
@@ -274,6 +273,25 @@ export default function AnnotationEngine() {
         if (res.ok) {
             alert('保存成功');
             fetchImages();
+        }
+    };
+
+    const deleteAsset = async () => {
+        if (!activeImage) return;
+        if (!window.confirm('警告：是否确定永久删除该案件资产及它关联的所有隐患红线？删除后数据无法恢复！')) return;
+
+        try {
+            const res = await fetch(`/api/assets/${activeImage.name}`, { method: 'DELETE' });
+            if (res.ok) {
+                setActiveImage(null);
+                setAnnotations([]);
+                fetchImages();
+            } else {
+                alert('删除失败，服务器异常');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('网络传输错误');
         }
     };
 
@@ -314,12 +332,53 @@ export default function AnnotationEngine() {
         }
     };
 
+    // 建立深度映射字典 (用于支持四级检索与全量展示)
+    const clauseMap = React.useMemo(() => {
+        const map = {};
+        knowledgeTree.forEach(sceneNode => {
+            sceneNode.types.forEach(typeNode => {
+                typeNode.items.forEach(item => {
+                    map[item.id] = {
+                        scene: sceneNode.scene,
+                        type: typeNode.typeName,
+                        desc: item.desc,
+                        clause: item.clause
+                    };
+                });
+            });
+        });
+        return map;
+    }, [knowledgeTree]);
+
     const filteredImages = images.filter(img => {
-        const matchQuery = img.name.toLowerCase().includes(searchQuery.toLowerCase());
+        // 构建全维度检索引擎文本池
+        let totalText = img.name.toLowerCase();
+        if (img.isAnnotated && img.meta?.items?.length > 0) {
+            const annoTexts = img.meta.items.map(anno => {
+                const data = clauseMap[anno.clauseId];
+                return data ? `${data.scene} ${data.type} ${data.desc} ${data.clause}`.toLowerCase() : '';
+            });
+            totalText += ' ' + annoTexts.join(' ');
+        }
+
+        // 支持空格分割的多关键词并集(AND)模糊联查
+        const keywords = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
+        const matchQuery = keywords.every(kw => totalText.includes(kw));
+
         const matchStatus = filterStatus === 'all' ||
             (filterStatus === 'annotated' && img.isAnnotated) ||
             (filterStatus === 'unannotated' && !img.isAnnotated);
-        return matchQuery && matchStatus;
+
+        let matchScene = true;
+        if (filterScene !== 'all') {
+            if (img.isAnnotated && img.meta?.items?.length > 0) {
+                matchScene = img.meta.items.some(anno => clauseMap[anno.clauseId]?.scene === filterScene);
+            } else {
+                matchScene = false;
+            }
+        }
+
+        return matchQuery && matchStatus && matchScene;
     });
 
     return (
@@ -327,7 +386,7 @@ export default function AnnotationEngine() {
             {/* 左侧资源大厅 */}
             <div className="w-80 bg-white border-r border-gray-200 p-4 flex flex-col h-full flex-shrink-0">
                 <h3 className="text-lg font-bold mb-4 flex items-center justify-between">
-                    <span>图库存量库</span>
+                    <span>案例库</span>
                     <input
                         type="file"
                         ref={fileInputRef}
@@ -352,15 +411,27 @@ export default function AnnotationEngine() {
                         value={searchQuery}
                         onChange={e => setSearchQuery(e.target.value)}
                     />
-                    <select
-                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
-                        value={filterStatus}
-                        onChange={e => setFilterStatus(e.target.value)}
-                    >
-                        <option value="all">所有状态 (All)</option>
-                        <option value="annotated">🟢 仅显示已排查 (Annotated)</option>
-                        <option value="unannotated">⚪️ 仅显示未排查 (Missing)</option>
-                    </select>
+                    <div className="flex space-x-2">
+                        <select
+                            className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 outline-none"
+                            value={filterScene}
+                            onChange={e => setFilterScene(e.target.value)}
+                        >
+                            <option value="all">全业务场景</option>
+                            {knowledgeTree.map(k => (
+                                <option key={k.scene} value={k.scene}>{k.scene}</option>
+                            ))}
+                        </select>
+                        <select
+                            className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 outline-none"
+                            value={filterStatus}
+                            onChange={e => setFilterStatus(e.target.value)}
+                        >
+                            <option value="all">所有状态</option>
+                            <option value="annotated">🟢 已排查</option>
+                            <option value="unannotated">⚪️ 未排查</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div className="overflow-y-auto space-y-2 flex-grow pr-2 config-scrollbar">
@@ -409,13 +480,22 @@ export default function AnnotationEngine() {
                         {/* 场景下拉栏已被移除，支持纯碎的画框打点 */}
                     </div>
                     {activeImage && (
-                        <button
-                            onClick={saveMeta}
-                            className="bg-indigo-600 text-white px-5 py-2.5 rounded shadow hover:bg-indigo-700 flex items-center text-sm font-semibold transition"
-                        >
-                            <Save className="w-4 h-4 mr-2" />
-                            持久化保存 Sidecar
-                        </button>
+                        <div className="flex space-x-3">
+                            <button
+                                onClick={deleteAsset}
+                                className="bg-red-50 text-red-600 px-4 py-2 rounded shadow-sm hover:bg-red-100 flex items-center text-sm font-semibold transition border border-red-200"
+                            >
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                销毁案例
+                            </button>
+                            <button
+                                onClick={saveMeta}
+                                className="bg-indigo-600 text-white px-5 py-2 rounded shadow hover:bg-indigo-700 flex items-center text-sm font-semibold transition"
+                            >
+                                <Save className="w-4 h-4 mr-2" />
+                                保存标注
+                            </button>
+                        </div>
                     )}
                 </div>
 
@@ -541,12 +621,15 @@ export default function AnnotationEngine() {
                                             <span className={`text-xs font-black px-1.5 rounded transition-colors ${hoveredAnnoId === anno.id ? 'bg-red-500 text-white' : 'text-red-700 bg-red-100'}`}>隐患 #{idx + 1}</span>
                                             <span className="text-xs font-bold text-gray-500">权重: {anno.scoreWeight}</span>
                                         </div>
-                                        <p className="text-sm font-semibold text-gray-800 mt-1 mb-1 line-clamp-2" title={anno.description}>
+                                        <p className="text-sm font-semibold text-gray-800 mt-1 mb-1 leading-relaxed whitespace-pre-wrap">
                                             {anno.description || "未记录详细说明"}
                                         </p>
-                                        <p className="text-[10px] text-gray-500 font-mono mt-1 pt-1 border-t border-red-100/50 line-clamp-3 leading-relaxed group-hover:line-clamp-none transition-all">
-                                            关联ID: {anno.clauseId}
-                                        </p>
+                                        <div className="text-[10px] text-gray-500 font-mono mt-2 pt-2 border-t border-red-100/50 space-y-1.5">
+                                            <div><span className="text-red-400 font-bold">1. 场景:</span> {clauseMap[anno.clauseId]?.scene || '未知'}</div>
+                                            <div><span className="text-red-400 font-bold">2. 大类:</span> {clauseMap[anno.clauseId]?.type || '未知'}</div>
+                                            <div><span className="text-red-400 font-bold">3. 定性:</span> {clauseMap[anno.clauseId]?.desc || '未知'}</div>
+                                            <div className="leading-relaxed"><span className="text-red-400 font-bold">4. 法则:</span> {clauseMap[anno.clauseId]?.clause || anno.clauseId}</div>
+                                        </div>
                                     </div>
                                 )
                             })
@@ -569,12 +652,14 @@ export default function AnnotationEngine() {
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">1. 业务场景分类</label>
                                     <select className="w-full border-gray-300 border rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none" value={mScene} onChange={e => setMScene(e.target.value)}>
+                                        <option value="" disabled>-- 请选择业务场景 --</option>
                                         {knowledgeTree.map(k => <option key={k.scene} value={k.scene}>{k.scene}</option>)}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">2. 隐患问题大类</label>
                                     <select className="w-full border-gray-300 border rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none" value={mType} onChange={e => setMType(e.target.value)}>
+                                        <option value="" disabled>-- 请选择隐患大类 --</option>
                                         {currentSceneData?.types.map(t => <option key={t.typeName} value={t.typeName}>{t.typeName}</option>)}
                                     </select>
                                 </div>

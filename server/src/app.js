@@ -78,6 +78,37 @@ app.post('/api/assets/upload', upload.single('image'), async (req, res) => {
     }
 });
 
+// 3.5 删除图片及所有关联数据 (物理 + 数据库)
+app.delete('/api/assets/:filename', async (req, res) => {
+    try {
+        const db = getDB();
+        const filename = req.params.filename;
+
+        // DB 级联删除
+        const deleteAsset = db.prepare('DELETE FROM assets WHERE id = ?');
+        const deleteAnnos = db.prepare('DELETE FROM annotations WHERE asset_id = ?');
+        const deleteExamItems = db.prepare('DELETE FROM exam_items WHERE asset_id = ?');
+
+        db.transaction(() => {
+            deleteAnnos.run(filename);
+            deleteExamItems.run(filename);
+            deleteAsset.run(filename);
+        })();
+
+        // 物理文件删除
+        const filePath = path.join(DIR_RAW, filename);
+        try {
+            await fs.unlink(filePath);
+        } catch (fileErr) {
+            console.warn(`[Warn] Physical file not found or already deleted: ${filePath}`);
+        }
+
+        res.json({ status: "success" });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // 4. 获取特定图片的标注元数据
 app.get('/api/assets/meta/:imgName', async (req, res) => {
     try {
@@ -171,18 +202,19 @@ app.post('/api/session/record', async (req, res) => {
     }
 });
 
-// 8. 组卷发布
+// 8. 组卷保存/发布
 app.post('/api/exams/publish', async (req, res) => {
     const db = getDB();
-    const { examName, description, slides } = req.body;
+    const { examName, description, slides, status } = req.body;
     const examId = examName;
+    const finalStatus = status || 'published';
 
-    const insertExam = db.prepare('INSERT OR REPLACE INTO exams (id, exam_name, description, created_at) VALUES (?, ?, ?, ?)');
+    const insertExam = db.prepare('INSERT OR REPLACE INTO exams (id, exam_name, description, status, created_at) VALUES (?, ?, ?, ?, ?)');
     const deleteItems = db.prepare('DELETE FROM exam_items WHERE exam_id = ?');
     const insertItem = db.prepare('INSERT INTO exam_items (exam_id, asset_id, order_index) VALUES (?, ?, ?)');
 
     const tx = db.transaction((data) => {
-        insertExam.run(examId, data.examName, data.description || '', Date.now());
+        insertExam.run(examId, data.examName, data.description || '', finalStatus, Date.now());
         deleteItems.run(examId);
         if (data.slides) {
             data.slides.forEach((assetId, idx) => {
@@ -193,7 +225,8 @@ app.post('/api/exams/publish', async (req, res) => {
 
     try {
         tx({ examName, description, slides });
-        res.json({ status: "success", message: `试卷【${examName}】发布成功！` });
+        const actionText = finalStatus === 'published' ? '发布' : '保存';
+        res.json({ status: "success", message: `试卷【${examName}】${actionText}成功！` });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -230,6 +263,7 @@ app.get('/api/exams', async (req, res) => {
                 name: e.id,
                 examName: e.exam_name,
                 description: e.description,
+                status: e.status || 'published', // 考虑到老数据可能是 active 等
                 slides: items.map(i => i.asset_id),
                 mtime: e.created_at
             };
@@ -245,6 +279,18 @@ app.delete('/api/exams/:id', async (req, res) => {
     try {
         const db = getDB();
         db.prepare('DELETE FROM exams WHERE id = ?').run(req.params.id);
+        res.json({ status: "success" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 9.3 切换考卷发布状态
+app.put('/api/exams/:id/status', async (req, res) => {
+    try {
+        const db = getDB();
+        const { status } = req.body;
+        db.prepare('UPDATE exams SET status = ? WHERE id = ?').run(status, req.params.id);
         res.json({ status: "success" });
     } catch (err) {
         res.status(500).json({ error: err.message });

@@ -44,11 +44,13 @@
   }
   ```
 
-### 3. 数据层挂载
-项目不建立传统的数据库表连接！
-* **图片源挂接点**：`/server/data/assets/raw`
-* **JSON描述挂接点**：`/server/data/assets/meta`
+### 3. 数据层挂载 (Evolution to SQLite)
+早期架构不建立传统的数据库表连接，完全依赖静态 JSON 文件：
+* **图片源**：`/server/data/assets/raw`
+* **JSON描述**：`/server/data/assets/meta/*.json`
 * **条款定义字典**：`/server/data/knowledge/clauses.json`
-* **历次考试清单明细**：`/server/data/sessions/records/`
 
-以上目录结构保证了该平台能够完全基于静态目录作为“超级字典树”工作。通过这种重型文件的平铺索引化代替SQL表，完全去掉了系统的数据库依赖。
+**[Sprint 10+ 架构升级]**：
+为了支撑多维度查询（如：多关键词空格并发检索、状态分拣），底层数据已统一升级至**单文件零配置的 SQLite 关系型数据库**。
+* **物理主库**：`/server/data/safeeye.db`
+* **解耦优势**：依然保持一定的便携性，复制整个 `data` 目录即可实现跨设备转移。包含所有的图片元数据 (`assets`、`annotations`)、题库 (`exams`)、以及多场景知识字典 (`knowledge`) 均交由 Node.js 层的 `better-sqlite3` 直接驱动。
