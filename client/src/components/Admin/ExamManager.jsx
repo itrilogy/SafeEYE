@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ScrollText, Play, Trash2 } from 'lucide-react';
 
-export default function ExamManager() {
+export default function ExamManager({ onEnterExam }) {
     const [exams, setExams] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -58,6 +58,9 @@ export default function ExamManager() {
                                 <p className="text-xs text-gray-500 mt-1">包含 {exam.slides?.length || 0} 道题 | {new Date(exam.mtime || exam.createdAt).toLocaleString()}</p>
                             </div>
                             <div className="flex space-x-2">
+                                <button onClick={() => onEnterExam && onEnterExam(exam.name || exam.examName)} className="p-2 text-gray-400 hover:text-emerald-500 transition rounded-full hover:bg-emerald-50" title="进入实勘考核">
+                                    <Play className="w-4 h-4" />
+                                </button>
                                 <button onClick={() => handleDelete(exam.name)} className="p-2 text-gray-400 hover:text-red-500 transition rounded-full hover:bg-red-50" title="删除">
                                     <Trash2 className="w-4 h-4" />
                                 </button>

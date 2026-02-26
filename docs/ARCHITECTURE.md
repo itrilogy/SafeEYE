@@ -33,3 +33,11 @@
 
 前端通过百分比记录所有坐标。`x_ratio` 和 `y_ratio`。无论是 4K 屏幕还是 iPad 预览，前端只做一件事：
 `left: img.clientWidth * x_ratio, top: img.clientHeight * y_ratio`。完美抹平台设备分辨率差异，不再依赖固定尺寸计算。这也是“坐标转换”的核心引擎价值。
+
+## Frontend 状态解耦机制 (Top-Down State Flow)
+
+在多组件协同（如“左侧画布与右侧列表联动”、“组卷大厅强起考试屏”）的场景下，SafeEYE 坚守**单向数据流**设计哲学，拒绝引入 Redux 等重型状态管理的包袱。
+1. **统一根节点提权 (Lifting State Up)**：
+   在 `App.jsx` 顶层统一把控 `activeExamId`、`autoStartExamId` 等指令中心，通过 Props 跨组件向下击穿分发。
+2. **状态驱动的同源视图 (Single Source of Truth)**：
+   使用唯一识别码（例如 `hoveredAnnoId`），不论是鼠标移入左侧图形气泡，还是滑过右侧属性清单面板，唯一的事件出口都会回传给父节点去修改这一公理级 ID，从而驱动全屏关联节点实现“双向发光联动”的量子纠缠效应。

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Target, AlertTriangle, ShieldCheck, CheckCircle2 } from 'lucide-react';
 
-export default function InteractionJudge({ onExamStart, onExamChange }) {
+export default function InteractionJudge({ onExamStart, onExamChange, autoStartExamId, onAutoStartConsumed }) {
     const [allExams, setAllExams] = useState([]);
     const [isTesting, setIsTesting] = useState(false);
     const [selectedExam, setSelectedExam] = useState(null);
@@ -50,27 +50,46 @@ export default function InteractionJudge({ onExamStart, onExamChange }) {
             const exams = await pRes.json();
             setAllExams(exams);
             if (exams.length > 0) {
-                setSelectedExam(exams[0]);
-                if (onExamChange) onExamChange(exams[0].examName);
+                let targetExam = exams[0];
+                let shouldAutoStart = false;
+
+                if (autoStartExamId) {
+                    const match = exams.find(e => (e.examName || e.name) === autoStartExamId);
+                    if (match) {
+                        targetExam = match;
+                        shouldAutoStart = true;
+                    }
+                }
+
+                setSelectedExam(targetExam);
+                if (onExamChange) onExamChange(targetExam.examName || targetExam.name);
+
+                if (shouldAutoStart) {
+                    executeStart(targetExam);
+                    if (onAutoStartConsumed) onAutoStartConsumed();
+                }
             }
         }
     };
 
-    const startExam = () => {
-        if (!selectedExam) return;
-
-        const testPaper = selectedExam.slides.map(name => ({
+    const executeStart = (examObj) => {
+        const testPaper = examObj.slides.map(name => ({
             name,
             url: `/assets/raw/${name}`
         }));
 
-        setExamId(selectedExam.examName);
+        setExamId(examObj.examName || examObj.name);
         setImages(testPaper);
         setCurrentIndex(0);
         setTotalScore(0);
         loadQuestion(testPaper[0]);
         setIsTesting(true);
-        if (onExamStart) onExamStart(selectedExam.examName);
+        if (onExamStart) onExamStart(examObj.examName || examObj.name);
+    };
+
+    const startExam = () => {
+        if (!selectedExam) return;
+        executeStart(selectedExam);
     };
 
     const loadQuestion = async (img) => {
@@ -177,7 +196,7 @@ export default function InteractionJudge({ onExamStart, onExamChange }) {
 
     if (!isTesting) {
         return (
-            <div className="flex-1 flex items-center justify-center bg-gray-900 p-8">
+            <div className="flex-1 w-full flex items-center justify-center bg-gray-900 p-8">
                 <div className="max-w-xl w-full bg-gray-800 rounded-3xl p-10 shadow-3xl border border-gray-700">
                     <div className="text-center mb-10">
                         <div className="w-20 h-20 bg-indigo-600/20 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-indigo-500/30">
@@ -233,7 +252,7 @@ export default function InteractionJudge({ onExamStart, onExamChange }) {
     }
 
     return (
-        <div className="flex bg-gray-900 h-full rounded-xl overflow-hidden shadow-2xl">
+        <div className="flex-1 w-full flex bg-gray-900">
             {/* 左侧考卷图呈现区 */}
             <div className="flex-1 relative flex items-center justify-center bg-black/90 p-4 border-r border-gray-700">
                 <div className="absolute top-4 left-4 bg-white/10 backdrop-blur-md px-4 py-2 rounded-lg flex space-x-4 border border-white/20 z-10">

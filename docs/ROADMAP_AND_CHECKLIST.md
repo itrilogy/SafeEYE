@@ -92,6 +92,14 @@
   * **DB Inspector**：前端开发表数据浏览器。
   * **碎片清理**：确认 SQL 数据无误后，一键物理删除冗余 JSON 边车文件。
 
+### Sprint 12: 精细化图形与交互管线升级 (UX Enhancement Pipeline)
+* **目标**：突破 Web Canvas DOM 瓶颈，实现原生软件级极速防呆交互。
+* **开发内容**：
+  * **图元与事件解耦**：将隐患标识的光环层与八点 Resize 触控层分离出独立的 React 节点森林，彻底攻克长久以来的圆形框选死角 Bug。
+  * **等比几何约束**：挂载原生的 `.shiftKey` 与 `.ctrlKey` Web API 事件监听，赋予图元 1:1 像素宽高长宽比锁定功能。
+  * **顶层状态机扩容**：在 `App` 与 `InteractionJudge` 层增设 `hoveredAnnoId` 与 `autoStartExamId`，利用最纯粹的 Props 单向流穿越层级壁垒，实现两侧面板的双向发光高亮（Two-way binding）及大跨度跳板（一键发卷直达实勘现场）控制。
+  * **龙虎榜结构翻新**：拆除横纵混杂的 DOM 层，将 `ScoreKeeper` 注入与主裁决面板 `InteractionJudge` 等高的侧边栏中。
+
 ---
 
 ## 🛡️ 第三部分：需要增加的强化复盘清单 (Enhanced Checklist)

@@ -5,6 +5,7 @@ export default function AnnotationEngine() {
     const [images, setImages] = useState([]);
     const [activeImage, setActiveImage] = useState(null);
     const [annotations, setAnnotations] = useState([]);
+    const [hoveredAnnoId, setHoveredAnnoId] = useState(null);
 
     const [isDrawing, setIsDrawing] = useState(false);
     const [drawMode, setDrawMode] = useState('rect'); // 'rect' | 'circle'
@@ -140,13 +141,29 @@ export default function AnnotationEngine() {
                     const dx = pos.xRatio - resizeStart.xRatio;
                     const dy = pos.yRatio - resizeStart.yRatio;
                     setResizeStart(pos);
+
+                    let newW = Math.max(0.01, a.rect.w + dx);
+                    let newH = Math.max(0.01, a.rect.h + dy);
+
+                    // 如果按下了 Shift/Ctrl 键，强制等比例缩放（正圆/正方形）
+                    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                        if (imageRef.current) {
+                            const rect = imageRef.current.getBoundingClientRect();
+                            const pixelW = newW * rect.width;
+                            const pixelH = newH * rect.height;
+                            const size = Math.max(pixelW, pixelH); // 以较大的拖拽跨度为边长
+                            newW = size / rect.width;
+                            newH = size / rect.height;
+                        }
+                    }
+
                     return {
                         ...a,
                         rect: {
                             x: a.rect.x,
                             y: a.rect.y,
-                            w: Math.max(0.01, a.rect.w + dx),
-                            h: Math.max(0.01, a.rect.h + dy)
+                            w: newW,
+                            h: newH
                         }
                     };
                 }
@@ -179,10 +196,27 @@ export default function AnnotationEngine() {
         // 处理新建拖拽绘制
         if (!isDrawing || !startPos) return;
 
-        const x = Math.min(startPos.xRatio, pos.xRatio);
-        const y = Math.min(startPos.yRatio, pos.yRatio);
-        const w = Math.abs(pos.xRatio - startPos.xRatio);
-        const h = Math.abs(pos.yRatio - startPos.yRatio);
+        let x = Math.min(startPos.xRatio, pos.xRatio);
+        let y = Math.min(startPos.yRatio, pos.yRatio);
+        let w = Math.abs(pos.xRatio - startPos.xRatio);
+        let h = Math.abs(pos.yRatio - startPos.yRatio);
+
+        // 如果按下了 Shift/Ctrl 键，强制绘制正圆/正方形
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+            if (imageRef.current) {
+                const rect = imageRef.current.getBoundingClientRect();
+                const pixelW = w * rect.width;
+                const pixelH = h * rect.height;
+                const size = Math.max(pixelW, pixelH); // 以拖拽绝对距离更长的一边为边长
+
+                w = size / rect.width;
+                h = size / rect.height;
+
+                // 为了防止等比拉伸后坐标越界，如果是反方向拖动（向左或向上），重新计算真正的原点
+                x = pos.xRatio < startPos.xRatio ? startPos.xRatio - w : startPos.xRatio;
+                y = pos.yRatio < startPos.yRatio ? startPos.yRatio - h : startPos.yRatio;
+            }
+        }
 
         setCurrentRect({ x, y, w, h });
     };
@@ -407,16 +441,18 @@ export default function AnnotationEngine() {
                                 />
 
                                 {/* 已生成的坐标覆盖层 */}
-                                {annotations.map(anno => (
+                                {annotations.map((anno, idx) => (
                                     <div
                                         key={anno.id}
-                                        className={`absolute border-[3px] border-red-500 bg-red-500/20 group transition-colors hover:bg-red-500/30 hover:border-red-400 ${anno.shape === 'circle' ? 'rounded-[50%]' : 'rounded-sm'} pointer-events-auto`}
+                                        className={`absolute group pointer-events-auto ${hoveredAnnoId === anno.id ? 'z-30' : 'z-10'}`}
                                         style={{
                                             left: `${anno.rect.x * 100}%`,
                                             top: `${anno.rect.y * 100}%`,
                                             width: `${anno.rect.w * 100}%`,
                                             height: `${anno.rect.h * 100}%`
                                         }}
+                                        onMouseEnter={() => setHoveredAnnoId(anno.id)}
+                                        onMouseLeave={() => setHoveredAnnoId(null)}
                                         // 拦截在图形上的点击，防止触发底图的新建画框并触发拖拽
                                         onMouseDown={(e) => {
                                             e.stopPropagation();
@@ -426,10 +462,22 @@ export default function AnnotationEngine() {
                                             }
                                         }}
                                     >
+                                        {/* 真实视觉渲染层：将形态剥离在内部，使得外部方形包围盒始终能包裹住按钮 */}
+                                        <div className={`w-full h-full border-[3px] transition-all pointer-events-none
+                                            ${hoveredAnnoId === anno.id ? 'border-red-400 bg-red-400/40 shadow-[0_0_15px_rgba(239,68,68,0.6)]' : 'border-red-500 bg-red-500/20 group-hover:bg-red-500/30 group-hover:border-red-400'}
+                                            ${anno.shape === 'circle' ? 'rounded-[50%]' : 'rounded-sm'}`}
+                                        />
+
+                                        {/* 底部悬浮标签文本 (隐患 #1) */}
+                                        <div className={`absolute -bottom-6 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded shadow-sm text-[10px] font-bold whitespace-nowrap pointer-events-none transition-colors
+                                            ${hoveredAnnoId === anno.id ? 'bg-red-500 text-white shadow-md scale-110 z-20' : 'bg-red-600/90 text-white/90 z-10'}`}>
+                                            隐患 #{idx + 1}
+                                        </div>
+
                                         {/* 右上角删除靶标 */}
                                         <button
                                             type="button"
-                                            className="absolute -top-3 -right-3 bg-white text-red-600 rounded-full border border-red-200 hidden group-hover:block hover:scale-110 shadow-lg z-10 p-0.5 cursor-pointer"
+                                            className="absolute -top-3 -right-3 bg-white text-red-600 rounded-full border border-red-200 hidden group-hover:block hover:scale-110 shadow-lg z-30 p-0.5 cursor-pointer"
                                             onMouseDown={(e) => {
                                                 e.stopPropagation();
                                                 setAnnotations(prev => prev.filter(a => a.id !== anno.id));
@@ -440,7 +488,7 @@ export default function AnnotationEngine() {
 
                                         {/* 右下角拖拉缩放触点热区 */}
                                         <div
-                                            className={`absolute -bottom-2 -right-2 w-6 h-6 bg-white border-2 border-red-500 cursor-nwse-resize shadow hidden group-hover:flex items-center justify-center hover:bg-red-100 transition-transform ${anno.shape === 'circle' ? 'rounded-full' : 'rounded-sm'} z-20`}
+                                            className={`absolute -bottom-2 -right-2 w-6 h-6 bg-white border-2 border-red-500 cursor-nwse-resize shadow hidden group-hover:flex items-center justify-center hover:bg-red-100 transition-transform ${anno.shape === 'circle' ? 'rounded-full' : 'rounded-sm'} z-30`}
                                             onMouseDown={(e) => {
                                                 e.stopPropagation();
                                                 e.preventDefault();
@@ -481,15 +529,22 @@ export default function AnnotationEngine() {
                         ) : (
                             annotations.map((anno, idx) => {
                                 return (
-                                    <div key={anno.id} className="p-3 bg-red-50 border border-red-100 rounded-lg group hover:border-red-300 transition-colors">
+                                    <div
+                                        key={anno.id}
+                                        className={`p-3 border rounded-lg group transition-colors cursor-pointer
+                                            ${hoveredAnnoId === anno.id ? 'bg-red-100 border-red-400 shadow-md ring-2 ring-red-200' : 'bg-red-50 border-red-100 hover:border-red-300'}
+                                        `}
+                                        onMouseEnter={() => setHoveredAnnoId(anno.id)}
+                                        onMouseLeave={() => setHoveredAnnoId(null)}
+                                    >
                                         <div className="flex justify-between items-start mb-1">
-                                            <span className="text-xs font-black text-red-700 bg-red-100 px-1.5 rounded">隐患 #{idx + 1}</span>
+                                            <span className={`text-xs font-black px-1.5 rounded transition-colors ${hoveredAnnoId === anno.id ? 'bg-red-500 text-white' : 'text-red-700 bg-red-100'}`}>隐患 #{idx + 1}</span>
                                             <span className="text-xs font-bold text-gray-500">权重: {anno.scoreWeight}</span>
                                         </div>
                                         <p className="text-sm font-semibold text-gray-800 mt-1 mb-1 line-clamp-2" title={anno.description}>
                                             {anno.description || "未记录详细说明"}
                                         </p>
-                                        <p className="text-[10px] text-gray-500 font-mono mt-1 pt-1 border-t border-red-100 line-clamp-3 leading-relaxed group-hover:line-clamp-none transition-all">
+                                        <p className="text-[10px] text-gray-500 font-mono mt-1 pt-1 border-t border-red-100/50 line-clamp-3 leading-relaxed group-hover:line-clamp-none transition-all">
                                             关联ID: {anno.clauseId}
                                         </p>
                                     </div>

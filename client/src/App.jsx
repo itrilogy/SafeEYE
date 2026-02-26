@@ -10,6 +10,12 @@ import { Fingerprint, ClipboardList, Zap, Database } from 'lucide-react';
 function App() {
   const [currentTab, setCurrentTab] = useState('annotation');
   const [activeExamId, setActiveExamId] = useState(null);
+  const [autoStartExamId, setAutoStartExamId] = useState(null);
+
+  const jumpToTest = (examId) => {
+    setAutoStartExamId(examId);
+    setCurrentTab('test');
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col font-sans text-gray-800">
@@ -58,35 +64,41 @@ function App() {
       {/* 主工作区路由分发 */}
       <main className="flex-1 w-full mx-auto p-4 sm:p-6 flex flex-col h-[calc(100vh-4rem)]">
         {currentTab === 'annotation' && (
-          <div className="w-full h-full bg-white shadow-xl rounded-xl overflow-hidden border border-gray-200">
+          <div className="w-full flex-1 bg-white shadow-xl rounded-xl overflow-hidden border border-gray-200">
             <AnnotationEngine />
           </div>
         )}
 
         {currentTab === 'exams' && (
-          <div className="w-full h-full flex bg-white shadow-xl rounded-xl overflow-hidden border border-gray-200">
+          <div className="w-full flex-1 flex bg-white shadow-xl rounded-xl overflow-hidden border border-gray-200">
             <div className="w-1/2 border-r border-gray-200">
               <TestAssembler />
             </div>
             <div className="w-1/2">
-              <ExamManager />
+              <ExamManager onEnterExam={jumpToTest} />
             </div>
           </div>
         )}
 
         {currentTab === 'test' && (
-          <div className="w-full h-full flex flex-col gap-4">
+          <div className="w-full flex-1 flex gap-4">
             <div className="flex-1 shadow-2xl rounded-xl overflow-hidden border border-gray-800 bg-gray-950 flex flex-col">
-              <InteractionJudge onExamStart={setActiveExamId} onExamChange={setActiveExamId} />
+              <InteractionJudge
+                onExamStart={setActiveExamId}
+                onExamChange={setActiveExamId}
+                autoStartExamId={autoStartExamId}
+                onAutoStartConsumed={() => setAutoStartExamId(null)}
+              />
             </div>
-            <div className="h-48 shadow-2xl rounded-xl overflow-hidden border border-gray-800 bg-gray-900">
+            {/* 这里的宽与 InteractionJudge 内部右侧面板保持 350px 一致 */}
+            <div className="w-[350px] shadow-2xl rounded-xl overflow-hidden border border-gray-800 bg-gray-900">
               <ScoreKeeper activeExamId={activeExamId} />
             </div>
           </div>
         )}
 
         {currentTab === 'inspector' && (
-          <div className="w-full h-full shadow-2xl rounded-xl overflow-hidden border border-gray-200 bg-white">
+          <div className="w-full flex-1 shadow-2xl rounded-xl overflow-hidden border border-gray-200 bg-white">
             <DBInspector />
           </div>
         )}
