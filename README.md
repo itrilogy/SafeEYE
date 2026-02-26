@@ -3,7 +3,7 @@
 > **基于“找不同”机制的交互式安全合规应知应会平台**
 >
 > **Design Philosophy:** 
-> 这是一个旨在消除安全培训枯燥感的“反引力”工程。通过将合规条款转化为视觉博弈，让风险识别成为直觉。项目采用本地 NoSQL 架构，实现极致的轻量化与数据主权。
+> 这是一个旨在消除安全培训枯燥感的“反引力”工程。通过将合规条款转化为视觉博弈，让风险识别成为直觉。项目采用**本地 SQLite 结构化架构**，实现极致的轻量化与数据主权。
 
 ---
 
@@ -18,10 +18,10 @@
 
 ## 🏗️ 整体规划与工程架构 (Engineering Blueprint)
 
-### 1. 存储架构：Local-First NoSQL
-项目放弃传统数据库，采用 **文件系统即数据库** 的设计：
-*   **Asset Sidecar (边车模式):** 每张图片 `A.jpg` 对应一个 `A.json`。
-*   **Decoupled Schema:** 条款库、场景库、成绩库均为独立的 JSON 文件，互不干扰。
+### 1. 存储架构：Local-First SQLite
+项目采用 **单一物理文件数据库 (SQLite)** 的极简设计，兼具高性能与零配置：
+*   **结构化底座:** 资产、标注、试卷、成绩等核心数据闭环存储在 `/server/data/safeeye.db` 中。
+*   **解耦的延续:** 虽然引入了 SQL，但通过内存级事务和 `better-sqlite3` 驱动，系统依然可以通过拷贝整个项目目录实现无缝跨设备运行。
 
 ### 2. 空间定位：Relative Positioning Engine (RPE)
 *   **零摩擦适配：** 所有标注坐标均以 `(x_ratio, y_ratio)` 存储。
@@ -37,15 +37,10 @@
 
 ```bash
 safe-eye-pro/
-├── data/                  # 本地存储中心 (Local NoSQL)
-│   ├── assets/            # 图片资源
-│   │   ├── raw/           # 原始现场图片 (ori_pic)
-│   │   └── meta/          # 图片元数据 (标注坐标、关联条款 ID)
-│   ├── knowledge/         # 合规知识库
-│   │   ├── clauses.json   # 安全标准、法律条款明细
-│   │   └── scenes.json    # 业务场景分类
-│   ├── exams/             # 测试活动配置
-│   └── records/           # 用户得分与详细点击行为记录
+├── data/                  # 本地物理存储 (SQLite & Assets)
+│   ├── safeeye.db         # [核心] SQLite 结构化数据库文件
+│   └── assets/            # 图片媒体资源
+│       └── raw/           # 原始现场高清图片 (ori_pic)
 ├── src/
 │   ├── admin/             # 管理端模块 (标注引擎、组卷器)
 │   ├── player/            # 用户端模块 (交互判题、成绩单)
@@ -67,6 +62,7 @@ safe-eye-pro/
     - 智能模式：按场景、难度、数量自动抽题。
     - 精细化微调：手动设置每题分值、容错点击次数、答案可见性。
 - **分析看板：** 查看参与者得分排行及详细的错题分布。
+- **数据巡检：** 提供 `DBInspector` 模块，便于实时对账物理表内容并支持一键清理旧式边车碎片。
 
 ### 用户端 (Interaction Terminal)
 - **极简准入：** 姓名、手机、部门快速登记，即刻开测。
@@ -81,8 +77,8 @@ safe-eye-pro/
 
 ### 技术栈
 - **Frontend:** React / Next.js (Fast & Responsive)
-- **Local DB:** Lowdb / Native File System API
-- **Canvas Library:** React-Konva 或原生 Canvas API
+- **Local DB:** SQLite 3 (better-sqlite3) / Native File System API
+- **Canvas Library:** 原生 DOM / 百分比坐标换算引擎
 - **Styling:** Tailwind CSS
 
 ### 运行与拉起服务 (How to Run)
@@ -106,8 +102,8 @@ safe-eye-pro/
 ---
 
 ## 🛡️ 安全与合规说明
-*   **数据隐私：** 采用本地存储，所有测试记录和原始图片均不上传云端。
-*   **标准同步：** 修改 `data/knowledge/clauses.json` 即可全局更新最新的国家标准，无需修改业务代码。
+*   **数据隐私：** 采用本地存储，所有测试记录和原始图片均物理隔离存放，绝不上传云端。
+*   **防断裂迁移：** 新增冷启动无损映射。服务端会在初次加载时检查数据库，如为空可自动将原始的独立知识库 `clauses.json` 抽取至物理表中，保障业务一致性。
 
 ---
 *Created by SafeEye Engineering Team with Vibe Coding Philosophy.*
