@@ -122,10 +122,13 @@ async function initDB() {
         db.exec("ALTER TABLE knowledge_items ADD COLUMN consequence_level TEXT");
     } catch (e) { }
 
-    // 初始化存量数据的风险等级 (全量重置为级别 3, 权重均为 9)
+    // 初始化存量数据的风险等级 (仅针对未设置的记录)
     try {
-        console.log("[SafeEYE-DB] 强制初始化所有知识条目风险等级为 3 (Weight 9)...");
-        db.exec("UPDATE knowledge_items SET likelihood_level = 'lh_3', consequence_level = 'cq_3'");
+        const nullCount = db.prepare("SELECT count(*) as c FROM knowledge_items WHERE likelihood_level IS NULL OR consequence_level IS NULL").get().c;
+        if (nullCount > 0) {
+            console.log(`[SafeEYE-DB] 发现 ${nullCount} 条未设置风险等级的条目，正在初始化为级别 3 (Weight 9)...`);
+            db.exec("UPDATE knowledge_items SET likelihood_level = 'lh_3', consequence_level = 'cq_3' WHERE likelihood_level IS NULL OR consequence_level IS NULL");
+        }
     } catch (e) { console.error("初始化风险等级失败", e); }
 
     // 初始化风险字典数据
@@ -191,15 +194,19 @@ async function initDB() {
         }
     } catch (e) { console.error("检测并迁移旧版知识库失败", e); }
 
-    // 检查是否需要迁移（如果 assets 为空则尝试迁移）
-    const count = db.prepare('SELECT count(*) as count FROM assets').get().count;
-    if (count === 0) {
-        console.log("检测到空数据库，开始从存量 JSON 迁移数据...");
-        await migrateData();
+    // 检查是否需要迁移
+    const assetCount = db.prepare('SELECT count(*) as count FROM assets').get().count;
+    const knowledgeCount = db.prepare('SELECT count(*) as count FROM knowledge_items').get().count;
+    const examCount = db.prepare('SELECT count(*) as count FROM exams').get().count;
+    const recordCount = db.prepare('SELECT count(*) as count FROM records').get().count;
+
+    if (assetCount === 0 || knowledgeCount === 0 || examCount === 0 || recordCount === 0) {
+        console.log("检测到部分数据缺失，执行按需迁移脚本...");
+        await migrateData({ assetCount, knowledgeCount, examCount, recordCount });
     }
 }
 
-async function migrateData() {
+async function migrateData(counts = {}) {
     // 迁移逻辑：读目录，解析 JSON，存入数据库
 
     // 1. 迁移 Assets & Annotations
@@ -245,35 +252,42 @@ async function migrateData() {
             const data = JSON.parse(content);
             tree = data.knowledgeTree || [];
         } else {
-            console.log("未发现知识库 JSON 文件，使用系统预置默认数据...");
-            tree = getDefaultKnowledge();
+            // 只有当知识库完全为空时才使用默认知识库
+            if (counts.knowledgeCount === 0) {
+                console.log("未发现知识库 JSON 文件且数据库为空，使用系统预置默认数据...");
+                tree = getDefaultKnowledge();
+            } else {
+                console.log("知识库已存在数据，跳过默认知识库迁移。");
+            }
         }
 
-        const insertScene = db.prepare('INSERT INTO knowledge_scenes (id, name, sort_order) VALUES (?, ?, ?)');
-        const insertCategory = db.prepare('INSERT INTO knowledge_categories (id, scene_id, name, sort_order) VALUES (?, ?, ?, ?)');
-        const insertItem = db.prepare('INSERT INTO knowledge_items (id, category_id, title, content, score_weight, standard_code, tags, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        if (tree.length > 0) {
+            const insertScene = db.prepare('INSERT OR IGNORE INTO knowledge_scenes (id, name, sort_order) VALUES (?, ?, ?)');
+            const insertCategory = db.prepare('INSERT OR IGNORE INTO knowledge_categories (id, scene_id, name, sort_order) VALUES (?, ?, ?, ?)');
+            const insertItem = db.prepare('INSERT OR IGNORE INTO knowledge_items (id, category_id, title, content, score_weight, standard_code, tags, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
 
-        db.transaction(() => {
-            let sceneOrder = 0;
-            for (const scItem of tree) {
-                const sceneId = `sc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                insertScene.run(sceneId, scItem.scene, sceneOrder++);
-                let catOrder = 0;
-                for (const typeItem of scItem.types) {
-                    const catId = `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                    insertCategory.run(catId, sceneId, typeItem.typeName, catOrder++);
-                    let itemOrder = 0;
-                    for (const item of typeItem.items) {
-                        insertItem.run(item.id, catId, item.desc, item.clause, item.weight || 10, '', '[]', itemOrder++);
+            db.transaction(() => {
+                let sceneOrder = 0;
+                for (const scItem of tree) {
+                    const sceneId = `sc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                    insertScene.run(sceneId, scItem.scene, sceneOrder++);
+                    let catOrder = 0;
+                    for (const typeItem of scItem.types) {
+                        const catId = `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                        insertCategory.run(catId, sceneId, typeItem.typeName, catOrder++);
+                        let itemOrder = 0;
+                        for (const item of typeItem.items) {
+                            insertItem.run(item.id, catId, item.desc, item.clause, item.weight || 10, '', '[]', itemOrder++);
+                        }
                     }
                 }
-            }
-        })();
+            })();
+        }
     } catch (e) { console.error("Knowledge 迁移失败", e); }
 
     // 3. 迁移 Exams
     try {
-        if (fsSync.existsSync(DIR_EXAMS)) {
+        if (counts.examCount === 0 && fsSync.existsSync(DIR_EXAMS)) {
             const files = await fs.readdir(DIR_EXAMS);
             for (const f of files) {
                 if (!f.endsWith('.json')) continue;
@@ -286,7 +300,7 @@ async function migrateData() {
 
                 if (data.slides) {
                     data.slides.forEach((assetId, idx) => {
-                        db.prepare('INSERT INTO exam_items (exam_id, asset_id, order_index) VALUES (?, ?, ?)')
+                        db.prepare('INSERT OR IGNORE INTO exam_items (exam_id, asset_id, order_index) VALUES (?, ?, ?)')
                             .run(examId, assetId, idx);
                     });
                 }
@@ -296,19 +310,19 @@ async function migrateData() {
 
     // 4. 迁移 Records
     try {
-        if (fsSync.existsSync(DIR_RECORDS)) {
+        if (counts.recordCount === 0 && fsSync.existsSync(DIR_RECORDS)) {
             const files = await fs.readdir(DIR_RECORDS);
             for (const f of files) {
                 if (!f.endsWith('.json')) continue;
                 const content = await fs.readFile(path.join(DIR_RECORDS, f), 'utf-8');
                 const data = JSON.parse(content);
-                db.prepare('INSERT INTO records (exam_id, user_name, score, completed_at) VALUES (?, ?, ?, ?)')
+                db.prepare('INSERT OR IGNORE INTO records (exam_id, user_name, score, completed_at) VALUES (?, ?, ?, ?)')
                     .run(data.examId, data.userName, data.score, data.completedAt);
             }
         }
     } catch (e) { console.error("Records 迁移失败", e); }
 
-    console.log("结构化数据迁移完成。");
+    console.log("结构化数据迁移分析完成。");
 }
 
 function getDB() {
