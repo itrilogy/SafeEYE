@@ -21,9 +21,19 @@ export default function InteractionJudge({ onExamStart, onExamChange, autoStartE
     const imageRef = useRef(null);
     const MAX_MISS = 3;
 
-    const [userName, setUserName] = useState("匿名审计员-" + Math.floor(Math.random() * 1000));
     const [examId, setExamId] = useState(null);
     const [totalScore, setTotalScore] = useState(0);
+
+    // Toast 提示状态
+    const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+    const showToast = (message, type = 'success') => {
+        setToast({ show: true, message, type });
+        setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 4000);
+    };
+
+    // 考卷总分与规则缓存
+    const [examSettings, setExamSettings] = useState({ total_score: 100, scoring_rule: 'weighted' });
+    const [pointScoreMap, setPointScoreMap] = useState({}); // pointId -> calculated score
 
     useEffect(() => {
         // 读取最新的考卷试题结构
@@ -83,9 +93,60 @@ export default function InteractionJudge({ onExamStart, onExamChange, autoStartE
         setImages(testPaper);
         setCurrentIndex(0);
         setTotalScore(0);
+
+        // 初始化考卷全局统计以支持比例/均分计分
+        const settings = {
+            total_score: examObj.total_score || 100,
+            scoring_rule: examObj.scoring_rule || 'weighted'
+        };
+        setExamSettings(settings);
+
+        calculateExamStats(examObj.slides, settings);
         loadQuestion(testPaper[0]);
         setIsTesting(true);
         if (onExamStart) onExamStart(examObj.examName || examObj.name);
+    };
+
+    const calculateExamStats = async (slides, settings) => {
+        let allPoints = [];
+        for (const slide of slides) {
+            try {
+                const res = await fetch(`/api/assets/meta/${slide}`);
+                const data = await res.json();
+                const items = data.meta?.items || [];
+                allPoints.push(...items);
+            } catch (e) { console.error('获取题目元数据失败', e); }
+        }
+
+        const totalScore = settings.total_score || 100;
+        const rule = settings.scoring_rule || 'weighted';
+        const scoreMap = {};
+
+        if (rule === 'average' && allPoints.length > 0) {
+            const base = Math.floor(totalScore / allPoints.length);
+            let remainder = totalScore % allPoints.length;
+            allPoints.forEach((p, idx) => {
+                scoreMap[p.id] = base + (remainder > 0 ? 1 : 0);
+                if (remainder > 0) remainder--;
+            });
+        } else if (rule === 'weighted' && allPoints.length > 0) {
+            const totalWeight = allPoints.reduce((sum, p) => sum + (p.scoreWeight || 0), 0);
+            if (totalWeight > 0) {
+                let runningSum = 0;
+                allPoints.forEach((p, idx) => {
+                    if (idx === allPoints.length - 1) {
+                        scoreMap[p.id] = totalScore - runningSum;
+                    } else {
+                        const score = Math.floor(((p.scoreWeight || 0) / totalWeight) * totalScore);
+                        scoreMap[p.id] = score;
+                        runningSum += score;
+                    }
+                });
+            } else {
+                allPoints.forEach(p => scoreMap[p.id] = 0);
+            }
+        }
+        setPointScoreMap(scoreMap);
     };
 
     const startExam = () => {
@@ -123,13 +184,13 @@ export default function InteractionJudge({ onExamStart, onExamChange, autoStartE
                         completedAt: Date.now()
                     })
                 });
-                alert(`🎊 考核通过！你在本次防爆巡检实勘中斩获 ${totalScore} 分。成绩已上报安监大屏！`);
+                showToast(`🎊 考核通过！你在本次防爆巡检实勘中斩获 ${Math.round(totalScore)} 分。成绩已上报安监大屏！`);
                 // 返回大厅
                 setIsTesting(false);
                 setCurrentIndex(0);
                 setTotalScore(0);
             } catch (e) {
-                alert('成绩上传异常');
+                showToast('成绩上传异常', 'error');
             }
         }
     };
@@ -159,8 +220,9 @@ export default function InteractionJudge({ onExamStart, onExamChange, autoStartE
             if (!foundItems.includes(hitItem.id)) {
                 setFoundItems(prev => {
                     const newFound = [...prev, hitItem.id];
-                    // 动态加分
-                    setTotalScore(s => s + (hitItem.scoreWeight || 10));
+                    // 从预计算的 Map 中取分
+                    const scoreToAdd = pointScoreMap[hitItem.id] || 0;
+                    setTotalScore(s => s + scoreToAdd);
 
                     // 瞬时判断是否通关
                     if (newFound.length >= metaData.length) {
@@ -385,6 +447,14 @@ export default function InteractionJudge({ onExamStart, onExamChange, autoStartE
                     )}
                 </div>
             </div>
+            {/* Toast 提示浮层 */}
+            {toast.show && (
+                <div className={`fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[100] px-8 py-4 rounded-2xl shadow-3xl animate-in fade-in zoom-in duration-300 flex flex-col items-center space-y-3 min-w-[300px] border-2 backdrop-blur-md
+                    ${toast.type === 'success' ? 'bg-emerald-500/90 text-white border-emerald-400' : 'bg-red-500/90 text-white border-red-400'}`}>
+                    {toast.type === 'success' ? <CheckCircle2 className="w-12 h-12" /> : <AlertTriangle className="w-12 h-12" />}
+                    <span className="text-lg font-black tracking-wide text-center">{toast.message}</span>
+                </div>
+            )}
         </div>
     );
 }

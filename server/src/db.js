@@ -75,17 +75,121 @@ async function initDB() {
             session_log TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS knowledge (
+        CREATE TABLE IF NOT EXISTS knowledge_scenes (
             id TEXT PRIMARY KEY,
-            scene TEXT,
-            category TEXT,
-            title TEXT,
+            name TEXT NOT NULL,
+            description TEXT,
+            sort_order INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_categories (
+            id TEXT PRIMARY KEY,
+            scene_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            sort_order INTEGER DEFAULT 0,
+            FOREIGN KEY(scene_id) REFERENCES knowledge_scenes(id) ON DELETE CASCADE
+        );
+
+        -- 5. 风险矩阵字典表
+        CREATE TABLE IF NOT EXISTS risk_dictionary (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL, -- 'likelihood' or 'consequence'
+            level_name TEXT NOT NULL,
+            level_value INTEGER NOT NULL
+        );
+
+        -- 6. 知识明细表 (增加风险评估字段)
+        CREATE TABLE IF NOT EXISTS knowledge_items (
+            id TEXT PRIMARY KEY,
+            category_id TEXT NOT NULL,
+            title TEXT NOT NULL,
             content TEXT,
             score_weight INTEGER DEFAULT 10,
+            likelihood_level TEXT, -- 关联风险字典
+            consequence_level TEXT, -- 关联风险字典
             standard_code TEXT,
-            tags TEXT
+            tags TEXT,
+            sort_order INTEGER DEFAULT 0,
+            FOREIGN KEY (category_id) REFERENCES knowledge_categories(id) ON DELETE CASCADE
         );
     `);
+
+    // 升级现有表结构 (若已存在)
+    try {
+        db.exec("ALTER TABLE knowledge_items ADD COLUMN likelihood_level TEXT");
+    } catch (e) { }
+    try {
+        db.exec("ALTER TABLE knowledge_items ADD COLUMN consequence_level TEXT");
+    } catch (e) { }
+
+    // 初始化存量数据的风险等级 (全量重置为级别 3, 权重均为 9)
+    try {
+        console.log("[SafeEYE-DB] 强制初始化所有知识条目风险等级为 3 (Weight 9)...");
+        db.exec("UPDATE knowledge_items SET likelihood_level = 'lh_3', consequence_level = 'cq_3'");
+    } catch (e) { console.error("初始化风险等级失败", e); }
+
+    // 初始化风险字典数据
+    const dictCount = db.prepare('SELECT count(*) as c FROM risk_dictionary').get().c;
+    if (dictCount === 0) {
+        console.log('[SafeEYE-DB] Initializing risk dictionary...');
+        const insertDict = db.prepare('INSERT INTO risk_dictionary (id, type, level_name, level_value) VALUES (?, ?, ?, ?)');
+        const defaults = [
+            // Consequences
+            ['cq_1', 'consequence', '极轻微', 1],
+            ['cq_2', 'consequence', '轻微', 2],
+            ['cq_3', 'consequence', '普通', 3],
+            ['cq_4', 'consequence', '严重', 4],
+            ['cq_5', 'consequence', '非常严重', 5],
+            // Likelihoods
+            ['lh_1', 'likelihood', '几乎不会发生', 1],
+            ['lh_2', 'likelihood', '不太可能发生', 2],
+            ['lh_3', 'likelihood', '可能发生', 3],
+            ['lh_4', 'likelihood', '很可能发生', 4],
+            ['lh_5', 'likelihood', '几乎肯定发生', 5]
+        ];
+        db.transaction(() => {
+            for (const d of defaults) insertDict.run(...d);
+        })();
+    }
+
+    // 检查是否需要从扁平版 knowledge 表迁移为新版结构化表
+    try {
+        const oldTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge'").get();
+        if (oldTableExists) {
+            const scenesCount = db.prepare('SELECT count(*) as count FROM knowledge_scenes').get().count;
+            if (scenesCount === 0) {
+                console.log("检测到旧版 knowledge 扁平表，开始执行向上的聚类抽取与结构化迁移...");
+                const scenes = db.prepare('SELECT DISTINCT scene FROM knowledge WHERE scene IS NOT NULL').all();
+
+                const insertScene = db.prepare('INSERT INTO knowledge_scenes (id, name, sort_order) VALUES (?, ?, ?)');
+                const insertCategory = db.prepare('INSERT INTO knowledge_categories (id, scene_id, name, sort_order) VALUES (?, ?, ?, ?)');
+                const insertItem = db.prepare('INSERT INTO knowledge_items (id, category_id, title, content, score_weight, standard_code, tags, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+
+                db.transaction(() => {
+                    let sceneOrder = 0;
+                    for (const s of scenes) {
+                        const sceneId = `sc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                        insertScene.run(sceneId, s.scene, sceneOrder++);
+
+                        const categories = db.prepare('SELECT DISTINCT category FROM knowledge WHERE scene = ? AND category IS NOT NULL').all(s.scene);
+                        let catOrder = 0;
+                        for (const c of categories) {
+                            const catId = `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                            insertCategory.run(catId, sceneId, c.category, catOrder++);
+
+                            const items = db.prepare('SELECT * FROM knowledge WHERE scene = ? AND category = ?').all(s.scene, c.category);
+                            let itemOrder = 0;
+                            for (const i of items) {
+                                insertItem.run(i.id, catId, i.title, i.content, i.score_weight, i.standard_code, i.tags || '[]', itemOrder++);
+                            }
+                        }
+                    }
+                    db.exec('ALTER TABLE knowledge RENAME TO _legacy_knowledge');
+                })();
+                console.log("知识库结构化迁移完成！旧表已重命名为 _legacy_knowledge。");
+            }
+        }
+    } catch (e) { console.error("检测并迁移旧版知识库失败", e); }
 
     // 检查是否需要迁移（如果 assets 为空则尝试迁移）
     const count = db.prepare('SELECT count(*) as count FROM assets').get().count;
@@ -145,14 +249,26 @@ async function migrateData() {
             tree = getDefaultKnowledge();
         }
 
-        for (const scItem of tree) {
-            for (const typeItem of scItem.types) {
-                for (const item of typeItem.items) {
-                    db.prepare('INSERT OR REPLACE INTO knowledge (id, scene, category, title, content, score_weight, standard_code) VALUES (?, ?, ?, ?, ?, ?, ?)')
-                        .run(item.id, scItem.scene, typeItem.typeName, item.desc, item.clause, item.weight || 10, '');
+        const insertScene = db.prepare('INSERT INTO knowledge_scenes (id, name, sort_order) VALUES (?, ?, ?)');
+        const insertCategory = db.prepare('INSERT INTO knowledge_categories (id, scene_id, name, sort_order) VALUES (?, ?, ?, ?)');
+        const insertItem = db.prepare('INSERT INTO knowledge_items (id, category_id, title, content, score_weight, standard_code, tags, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+
+        db.transaction(() => {
+            let sceneOrder = 0;
+            for (const scItem of tree) {
+                const sceneId = `sc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                insertScene.run(sceneId, scItem.scene, sceneOrder++);
+                let catOrder = 0;
+                for (const typeItem of scItem.types) {
+                    const catId = `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                    insertCategory.run(catId, sceneId, typeItem.typeName, catOrder++);
+                    let itemOrder = 0;
+                    for (const item of typeItem.items) {
+                        insertItem.run(item.id, catId, item.desc, item.clause, item.weight || 10, '', '[]', itemOrder++);
+                    }
                 }
             }
-        }
+        })();
     } catch (e) { console.error("Knowledge 迁移失败", e); }
 
     // 3. 迁移 Exams

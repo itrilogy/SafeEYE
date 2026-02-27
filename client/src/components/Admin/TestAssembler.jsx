@@ -13,6 +13,10 @@ export default function TestAssembler() {
     const [knowledgeTree, setKnowledgeTree] = useState([]);
     const [activePreview, setActivePreview] = useState(null);
 
+    // Scoring Options
+    const [totalScore, setTotalScore] = useState(100);
+    const [scoringRule, setScoringRule] = useState('weighted'); // 'weighted' | 'average'
+
     const containerRef = useRef(null);
     const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
     const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -85,7 +89,9 @@ export default function TestAssembler() {
                 description: paperDesc.trim(),
                 createdAt: Date.now(),
                 slides: selectedImages.map(img => img.name),
-                status: status
+                status: status,
+                total_score: totalScore,
+                scoring_rule: scoringRule
             };
             const res = await fetch('/api/exams/publish', {
                 method: 'POST',
@@ -143,6 +149,47 @@ export default function TestAssembler() {
         }
         return matchQuery && matchScene;
     });
+
+    // 计算分值分配 (倒挤法)
+    const examScores = React.useMemo(() => {
+        if (selectedImages.length === 0) return [];
+        let scores = [];
+        const totalExamPoints = selectedImages.reduce((sum, img) => sum + (img.meta?.items?.length || 0), 0);
+        const totalExamWeight = selectedImages.reduce((sum, img) => {
+            const caseWeight = (img.meta?.items || []).reduce((s, it) => s + (it.scoreWeight || 0), 0);
+            return sum + caseWeight;
+        }, 0);
+
+        if (scoringRule === 'average' && totalExamPoints > 0) {
+            const base = Math.floor(totalScore / totalExamPoints);
+            let remainder = totalScore % totalExamPoints;
+
+            selectedImages.forEach(img => {
+                const count = img.meta?.items?.length || 0;
+                let caseScore = 0;
+                for (let i = 0; i < count; i++) {
+                    caseScore += base + (remainder > 0 ? 1 : 0);
+                    if (remainder > 0) remainder--;
+                }
+                scores.push(caseScore);
+            });
+        } else if (scoringRule === 'weighted' && totalExamWeight > 0) {
+            let runningSum = 0;
+            selectedImages.forEach((img, idx) => {
+                if (idx === selectedImages.length - 1) {
+                    scores.push(totalScore - runningSum);
+                } else {
+                    const caseWeight = (img.meta?.items || []).reduce((s, it) => s + (it.scoreWeight || 0), 0);
+                    const caseScore = Math.floor((caseWeight / totalExamWeight) * totalScore);
+                    scores.push(caseScore);
+                    runningSum += caseScore;
+                }
+            });
+        } else {
+            selectedImages.forEach(() => scores.push(0));
+        }
+        return scores;
+    }, [selectedImages, totalScore, scoringRule]);
 
     return (
         <div className="bg-white flex flex-col h-full rounded-l-xl">
@@ -233,6 +280,28 @@ export default function TestAssembler() {
                                     onChange={e => setPaperDesc(e.target.value)}
                                 />
                             </div>
+                            <div className="pt-2 border-t border-gray-100 mt-2 grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">卷面总分 (Total)</label>
+                                    <input
+                                        type="number"
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-bold focus:ring-1 focus:ring-indigo-500 outline-none"
+                                        value={totalScore}
+                                        onChange={e => setTotalScore(parseInt(e.target.value) || 0)}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">赋分规则 (Rule)</label>
+                                    <select
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-bold focus:ring-1 focus:ring-indigo-500 outline-none"
+                                        value={scoringRule}
+                                        onChange={e => setScoringRule(e.target.value)}
+                                    >
+                                        <option value="weighted">比例赋分 (按权重倒挤)</option>
+                                        <option value="average">均分赋分 (题内按点平摊)</option>
+                                    </select>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -261,7 +330,7 @@ export default function TestAssembler() {
                                             <div className="flex items-center space-x-3 ml-2 flex-shrink-0">
                                                 <span className="text-[10px] font-mono font-medium text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded-md flex items-center">
                                                     <span className="w-1.5 h-1.5 rounded-full bg-red-400 mr-1.5"></span>
-                                                    {img.meta?.items?.length || 0} 隐患
+                                                    {img.meta?.items?.length || 0} 点 / {examScores[i]} 分
                                                 </span>
                                                 <button onClick={(e) => { e.stopPropagation(); toggleSelect(img); }} className="text-gray-300 group-hover:text-red-500 transition-colors p-0.5 rounded hover:bg-red-50" title="移除该题">
                                                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>

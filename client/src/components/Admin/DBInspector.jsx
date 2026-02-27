@@ -7,15 +7,22 @@ export default function DBInspector() {
     const [loading, setLoading] = useState(false);
     const [cleanupStatus, setCleanupStatus] = useState(null);
 
-    const tables = ['assets', 'annotations', 'exams', 'exam_items', 'records', 'knowledge'];
+    const tables = [
+        'assets', 'annotations', 'exams', 'exam_items', 'records',
+        'knowledge_scenes', 'knowledge_categories', 'knowledge_items',
+        'risk_dictionary', '_legacy_knowledge'
+    ];
 
     const fetchData = async () => {
         try {
             setLoading(true);
+            setData([]); // 在抓取新数据前先清空旧数据，防止 UI 错位
             const res = await fetch(`/api/admin/db/query/${selectedTable}`);
             if (res.ok) {
                 const json = await res.json();
                 setData(json);
+            } else {
+                console.error('API 返回错误状态:', res.status);
             }
         } catch (e) {
             console.error('Fetch error:', e);

@@ -27,6 +27,15 @@ export default function AnnotationEngine() {
     const [filterStatus, setFilterStatus] = useState('all'); // 'all', 'annotated', 'unannotated'
     const [filterScene, setFilterScene] = useState('all');
 
+    // UI 提示与反馈状态 (取代会闪烁的原生 alert/confirm)
+    const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+    const [confirmBox, setConfirmBox] = useState({ show: false, title: '', message: '', onConfirm: null });
+
+    const showToast = (message, type = 'success') => {
+        setToast({ show: true, message, type });
+        setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+    };
+
     const handleUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -53,7 +62,7 @@ export default function AnnotationEngine() {
             }
         } catch (error) {
             console.error('文件上传异常:', error);
-            alert('本地服务器未响应或跨域被拦截！');
+            showToast('本地服务器未响应或跨域被拦截！', 'error');
         } finally {
             if (fileInputRef.current) {
                 fileInputRef.current.value = '';
@@ -69,15 +78,32 @@ export default function AnnotationEngine() {
     const [knowledgeTree, setKnowledgeTree] = useState([]);
     const [selectedGlobalScene, setSelectedGlobalScene] = useState('');
 
-    // 模态框内的级联选择状态
     const [mScene, setMScene] = useState('');
     const [mType, setMType] = useState('');
     const [mItem, setMItem] = useState('');
 
+    // 计算派生数据以支持渲染
+    const currentSceneData = knowledgeTree.find(k => k.scene === mScene);
+    const currentTypeData = currentSceneData?.types.find(t => t.typeName === mType);
+    const currentItemData = currentTypeData?.items.find(i => i.id === mItem);
+
+    const [riskDict, setRiskDict] = useState([]);
+
     useEffect(() => {
         fetchImages();
         fetchKnowledge();
+        fetchRiskDict();
     }, []);
+
+    const fetchRiskDict = async () => {
+        try {
+            const res = await fetch('/api/admin/risk/dict');
+            if (res.ok) {
+                const data = await res.json();
+                setRiskDict(data);
+            }
+        } catch (e) { console.error('加载字典失败', e); }
+    };
 
     const fetchImages = async () => {
         const res = await fetch('/api/assets');
@@ -245,7 +271,7 @@ export default function AnnotationEngine() {
                 shape: drawMode, // 记录类型，方或圆
                 clauseId: '',
                 description: '',
-                scoreWeight: 10
+                scoreWeight: '' // 初始为空，由用户选择或输入
             });
             // 模态框级联字典重置为空，强制用户主动下拉选择
             setMScene('');
@@ -271,54 +297,62 @@ export default function AnnotationEngine() {
         });
 
         if (res.ok) {
-            alert('保存成功');
+            showToast('保存标注成功');
             fetchImages();
+        } else {
+            showToast('保存失败', 'error');
         }
     };
 
     const deleteAsset = async () => {
         if (!activeImage) return;
-        if (!window.confirm('警告：是否确定永久删除该案件资产及它关联的所有隐患红线？删除后数据无法恢复！')) return;
 
-        try {
-            const res = await fetch(`/api/assets/${activeImage.name}`, { method: 'DELETE' });
-            if (res.ok) {
-                setActiveImage(null);
-                setAnnotations([]);
-                fetchImages();
-            } else {
-                alert('删除失败，服务器异常');
+        setConfirmBox({
+            show: true,
+            title: '确认销毁案例',
+            message: '警告：是否确定永久删除该案件资产及它关联的所有隐患红线？删除后数据无法恢复！',
+            onConfirm: async () => {
+                try {
+                    const res = await fetch(`/api/assets/${activeImage.name}`, { method: 'DELETE' });
+                    if (res.ok) {
+                        setActiveImage(null);
+                        setAnnotations([]);
+                        fetchImages();
+                        showToast('案例已永久销毁');
+                    } else {
+                        showToast('删除失败，服务器异常', 'error');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    showToast('网络传输错误', 'error');
+                }
+                setConfirmBox({ ...confirmBox, show: false });
             }
-        } catch (e) {
-            console.error(e);
-            alert('网络传输错误');
+        });
+    };
+
+    // 级联变更处理
+    const onMSceneChange = (val) => {
+        setMScene(val);
+        const scene = knowledgeTree.find(k => k.scene === val);
+        if (scene && scene.types.length > 0) {
+            setMType(scene.types[0].typeName);
+            const type = scene.types[0];
+            if (type && type.items.length > 0) {
+                // 不自动选第一个 item，强制用户下拉
+                setMItem('');
+            }
+        } else {
+            setMType('');
+            setMItem('');
         }
     };
 
-    // 辅助获取当前选中的级联数据树进行渲染
-    const currentSceneData = knowledgeTree.find(k => k.scene === mScene);
-    const currentTypeData = currentSceneData?.types.find(t => t.typeName === mType);
-    const currentItemData = currentTypeData?.items.find(i => i.id === mItem);
+    const onMTypeChange = (val) => {
+        setMType(val);
+        setMItem(''); // 重置第三级
+    };
 
-    useEffect(() => {
-        if (mScene && currentSceneData && currentSceneData.types.length > 0) {
-            const firstType = currentSceneData.types[0].typeName;
-            if (mType !== firstType) {
-                setMType(firstType);
-            }
-        }
-    }, [mScene]);
-
-    useEffect(() => {
-        if (mType && currentTypeData && currentTypeData.items.length > 0) {
-            setMItem('');
-            if (pendingAnnotation) {
-                setPendingAnnotation(prev => prev ? { ...prev, clauseId: '', description: '' } : null);
-            }
-        }
-    }, [mType]);
-
-    // 当用户选择最后一层：具体隐患说明项时，录入法条等属性
     const handleItemChange = (itemId) => {
         setMItem(itemId);
         const itemObj = currentTypeData?.items.find(i => i.id === itemId);
@@ -327,7 +361,7 @@ export default function AnnotationEngine() {
                 ...pendingAnnotation,
                 clauseId: itemObj.id,
                 description: itemObj.desc,
-                scoreWeight: itemObj.weight || 10
+                scoreWeight: itemObj.weight || '' // 切换时填入权重，但允许为空
             });
         }
     };
@@ -342,13 +376,21 @@ export default function AnnotationEngine() {
                         scene: sceneNode.scene,
                         type: typeNode.typeName,
                         desc: item.desc,
-                        clause: item.clause
+                        clause: item.clause,
+                        likelihood_level: item.likelihood_level,
+                        consequence_level: item.consequence_level
                     };
                 });
             });
         });
         return map;
     }, [knowledgeTree]);
+
+    const getRiskLabel = (lId, cId) => {
+        const lName = riskDict.find(d => d.id === lId)?.level_name || '未评级';
+        const cName = riskDict.find(d => d.id === cId)?.level_name || '未评级';
+        return `${lName} × ${cName}`;
+    };
 
     const filteredImages = images.filter(img => {
         // 构建全维度检索引擎文本池
@@ -628,7 +670,8 @@ export default function AnnotationEngine() {
                                             <div><span className="text-red-400 font-bold">1. 场景:</span> {clauseMap[anno.clauseId]?.scene || '未知'}</div>
                                             <div><span className="text-red-400 font-bold">2. 大类:</span> {clauseMap[anno.clauseId]?.type || '未知'}</div>
                                             <div><span className="text-red-400 font-bold">3. 定性:</span> {clauseMap[anno.clauseId]?.desc || '未知'}</div>
-                                            <div className="leading-relaxed"><span className="text-red-400 font-bold">4. 法则:</span> {clauseMap[anno.clauseId]?.clause || anno.clauseId}</div>
+                                            <div><span className="text-red-400 font-bold">4. 风险:</span> {getRiskLabel(clauseMap[anno.clauseId]?.likelihood_level, clauseMap[anno.clauseId]?.consequence_level)}</div>
+                                            <div className="leading-relaxed"><span className="text-red-400 font-bold">5. 法则:</span> {clauseMap[anno.clauseId]?.clause || anno.clauseId}</div>
                                         </div>
                                     </div>
                                 )
@@ -651,14 +694,14 @@ export default function AnnotationEngine() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">1. 业务场景分类</label>
-                                    <select className="w-full border-gray-300 border rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none" value={mScene} onChange={e => setMScene(e.target.value)}>
+                                    <select className="w-full border-gray-300 border rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none" value={mScene} onChange={e => onMSceneChange(e.target.value)}>
                                         <option value="" disabled>-- 请选择业务场景 --</option>
                                         {knowledgeTree.map(k => <option key={k.scene} value={k.scene}>{k.scene}</option>)}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">2. 隐患问题大类</label>
-                                    <select className="w-full border-gray-300 border rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none" value={mType} onChange={e => setMType(e.target.value)}>
+                                    <select className="w-full border-gray-300 border rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-indigo-500 outline-none" value={mType} onChange={e => onMTypeChange(e.target.value)}>
                                         <option value="" disabled>-- 请选择隐患大类 --</option>
                                         {currentSceneData?.types.map(t => <option key={t.typeName} value={t.typeName}>{t.typeName}</option>)}
                                     </select>
@@ -680,15 +723,32 @@ export default function AnnotationEngine() {
                                 </p>
                             </div>
 
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">判题扣分权值 (1-100分)</label>
-                                <input
-                                    type="number"
-                                    min="1" max="100"
-                                    className="w-full border-gray-300 border rounded-lg p-2"
-                                    value={pendingAnnotation.scoreWeight}
-                                    onChange={(e) => setPendingAnnotation({ ...pendingAnnotation, scoreWeight: parseInt(e.target.value) || 0 })}
-                                />
+                            <div className="bg-amber-50 p-4 rounded-lg border border-amber-100 flex flex-col space-y-3">
+                                <label className="block text-sm font-medium text-amber-800">5. 风险动态评价 & 扣分定义</label>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-6">
+                                        <div className="text-xs">
+                                            <span className="text-gray-400 mr-1 italic">发生概率:</span>
+                                            <span className="font-bold text-gray-700">{riskDict.find(d => d.id === currentItemData?.likelihood_level)?.level_name || '--'}</span>
+                                        </div>
+                                        <div className="text-xs">
+                                            <span className="text-gray-400 mr-1 italic">后果严重:</span>
+                                            <span className="font-bold text-gray-700">{riskDict.find(d => d.id === currentItemData?.consequence_level)?.level_name || '--'}</span>
+                                        </div>
+                                        <div className="text-[10px] text-amber-600 font-medium">
+                                            (默认权重: <span className="font-black underline">{currentItemData?.weight || '--'}</span>)
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center space-x-3">
+                                        <label className="text-sm text-amber-700 font-bold whitespace-nowrap">实际扣分权重</label>
+                                        <input
+                                            type="number"
+                                            className="w-20 border-amber-200 border-2 rounded-lg px-2 py-1.5 text-sm font-black text-amber-900 focus:ring-2 focus:ring-amber-500 outline-none bg-white"
+                                            value={pendingAnnotation.scoreWeight}
+                                            onChange={(e) => setPendingAnnotation({ ...pendingAnnotation, scoreWeight: e.target.value === '' ? '' : parseInt(e.target.value) || 0 })}
+                                        />
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -702,7 +762,7 @@ export default function AnnotationEngine() {
                             <button
                                 onClick={() => {
                                     if (!pendingAnnotation.clauseId) {
-                                        alert("缔结指纹失败：必须要指定具体的隐患类型并关联法条！"); return;
+                                        showToast("缔结指纹失败：必须要指定具体的隐患类型并关联法条！", "error"); return;
                                     }
                                     setAnnotations([...annotations, pendingAnnotation]);
                                     setShowModal(false);
@@ -711,6 +771,43 @@ export default function AnnotationEngine() {
                                 className={`px-5 py-2 rounded-lg transition font-bold shadow-md ${!pendingAnnotation.clauseId ? 'bg-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg'}`}
                             >
                                 缔结印记
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Toast 提示浮层 */}
+            {toast.show && (
+                <div className={`fixed bottom-10 left-1/2 transform -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl animate-in slide-in-from-bottom duration-300 flex items-center space-x-2 border
+                    ${toast.type === 'success' ? 'bg-emerald-500 text-white border-emerald-400' : 'bg-red-500 text-white border-red-400'}`}>
+                    <span className="text-sm font-black tracking-wide">{toast.message}</span>
+                </div>
+            )}
+
+            {/* 自定义确认模态框 */}
+            {confirmBox.show && (
+                <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center backdrop-blur-md p-4">
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in duration-200">
+                        <div className="p-8 text-center">
+                            <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <Trash2 className="w-8 h-8" />
+                            </div>
+                            <h3 className="text-xl font-black text-gray-900 mb-2">{confirmBox.title}</h3>
+                            <p className="text-sm text-gray-500 leading-relaxed">{confirmBox.message}</p>
+                        </div>
+                        <div className="flex border-t border-gray-100">
+                            <button
+                                onClick={() => setConfirmBox({ ...confirmBox, show: false })}
+                                className="flex-1 py-4 text-sm font-bold text-gray-400 hover:bg-gray-50 transition border-r border-gray-100"
+                            >
+                                取消
+                            </button>
+                            <button
+                                onClick={confirmBox.onConfirm}
+                                className="flex-1 py-4 text-sm font-black text-red-500 hover:bg-red-50 transition"
+                            >
+                                确认销毁
                             </button>
                         </div>
                     </div>
